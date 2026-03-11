@@ -28,6 +28,10 @@ struct ContentView: View {
     @State private var lastFixDate: Date? = nil
     @State private var currentSpeedMS: CLLocationSpeed = 0
     @State private var currentCourseDeg: CLLocationDirection = 0
+    @State private var filteredSpeedMS: CLLocationSpeed = 0
+    @State private var prevFixDate: Date? = nil
+    @State private var prevFixSpeedMS: CLLocationSpeed = 0
+    @State private var prevFixCourseDeg: CLLocationDirection = 0
 
     // 60 FPS update loop for continuous camera movement
     @State private var displayLink = Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()
@@ -43,17 +47,49 @@ struct ContentView: View {
             .mapStyle(.standard(elevation: .realistic, showsTraffic: false))
             .allowsHitTesting(false)
             .overlay {
-                // Circular mask
                 GeometryReader { geo in
                     let size = min(geo.size.width, geo.size.height)
                     let circleRect = CGRect(x: (geo.size.width - size) / 2, y: (geo.size.height - size) / 2, width: size, height: size)
-                    Circle()
-                        .strokeBorder(AngularGradient(gradient: Gradient(colors: [.cyan, .purple, .pink, .cyan]), center: .center), lineWidth: 6)
-                        .shadow(color: .cyan.opacity(0.6), radius: 10)
-                        .shadow(color: .purple.opacity(0.6), radius: 20)
-                        .frame(width: circleRect.width, height: circleRect.height)
-                        .position(x: circleRect.midX, y: circleRect.midY)
-                        .blendMode(.plusLighter)
+                    let ringWidth: CGFloat = max(6, size * 0.02)
+                    let tickOuterRadius = size * 0.5 - ringWidth * 0.5
+                    let tickInnerRadiusMajor = tickOuterRadius - max(14, ringWidth * 1.4)
+                    let tickInnerRadiusMinor = tickOuterRadius - max(8, ringWidth * 0.9)
+
+                    ZStack {
+                        // Outer neon gradient rim
+                        Circle()
+                            .strokeBorder(
+                                AngularGradient(gradient: Gradient(colors: [.cyan, .blue, .purple, .pink, .cyan]), center: .center),
+                                lineWidth: ringWidth
+                            )
+                            .frame(width: circleRect.width, height: circleRect.height)
+                            .position(x: circleRect.midX, y: circleRect.midY)
+                            .shadow(color: .cyan.opacity(0.5), radius: 12)
+                            .shadow(color: .purple.opacity(0.4), radius: 24)
+
+                        // Subtle outer halo
+                        Circle()
+                            .stroke(LinearGradient(colors: [.cyan.opacity(0.25), .clear], startPoint: .top, endPoint: .bottom), lineWidth: ringWidth * 0.6)
+                            .blur(radius: 8)
+                            .frame(width: circleRect.width * 1.02, height: circleRect.height * 1.02)
+                            .position(x: circleRect.midX, y: circleRect.midY)
+                            .blendMode(.plusLighter)
+
+                        // Inner glass sheen
+                        Circle()
+                            .fill(
+                                RadialGradient(colors: [Color.white.opacity(0.10), Color.white.opacity(0.02), Color.clear], center: .top, startRadius: 0, endRadius: size * 0.55)
+                            )
+                            .frame(width: circleRect.width * 0.96, height: circleRect.height * 0.96)
+                            .position(x: circleRect.midX, y: circleRect.midY)
+                            .blur(radius: 2)
+                            .blendMode(.screen)
+
+                        // Tick marks around the ring
+                        TickMarksView(size: size, outerRadius: tickOuterRadius, innerRadiusMajor: tickInnerRadiusMajor, innerRadiusMinor: tickInnerRadiusMinor)
+                            .frame(width: circleRect.width, height: circleRect.height)
+                            .position(x: circleRect.midX, y: circleRect.midY)
+                    }
                 }
             }
             .mask {
@@ -62,17 +98,48 @@ struct ContentView: View {
                     Circle().frame(width: size, height: size).position(x: geo.size.width/2, y: geo.size.height/2)
                 }
             }
+            .overlay {
+                GeometryReader { geo in
+                    let isPortrait = geo.size.height >= geo.size.width
+                    let size = min(geo.size.width, geo.size.height)
+                    let padding = max(12, size * 0.04)
+
+                    if isPortrait {
+                        // Portrait: one centered above the circle, one centered below
+                        VStack {
+                            SpeedBadge(speedMS: filteredSpeedMS)
+                                .padding(.top, padding)
+                            Spacer()
+                            ClockBadge()
+                                .padding(.bottom, padding)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        // Landscape: keep them on the top corners
+                        HStack {
+                            SpeedBadge(speedMS: filteredSpeedMS)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            ClockBadge()
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        .padding(.horizontal, padding)
+                        .padding(.top, padding)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                }
+            }
             .background(Color.black.ignoresSafeArea())
             .preferredColorScheme(.dark)
-            
-            // Center arrow pointing up (player heading constant up)
-            ArrowIndicator()
-                .frame(width: 36, height: 36)
+
+            // Center arrow pointing up (player heading constant up) with 3D pitch effect
+            ArrowIndicator(pitch: mapPitch)
+                .frame(width: 42, height: 42)
+                .rotation3DEffect(.degrees(Double(mapPitch) * 0.25), axis: (x: 1, y: 0, z: 0), anchor: .center, perspective: 0.6)
+                .scaleEffect(1 + (mapPitch - 45) / 300)
                 .foregroundStyle(LinearGradient(colors: [.white, .cyan], startPoint: .top, endPoint: .bottom))
                 .shadow(color: .cyan.opacity(0.8), radius: 10, x: 0, y: 0)
                 .overlay {
-                    Circle().stroke(Color.cyan.opacity(0.4), lineWidth: 2)
-                        .blur(radius: 2)
+                    Circle().stroke(Color.cyan.opacity(0.4), lineWidth: 2).blur(radius: 2)
                 }
         }
         .onAppear {
@@ -107,8 +174,10 @@ struct ContentView: View {
             targetHeading = newHeading
             lastCoordinate = coord
 
-            // Map speed (m/s) to distance (m)
-            targetDistance = distance(for: speed)
+            // Shift previous fix
+            prevFixDate = lastFixDate
+            prevFixSpeedMS = currentSpeedMS
+            prevFixCourseDeg = currentCourseDeg
 
             // Store fix for dead-reckoning
             lastFixCoordinate = coord
@@ -121,6 +190,7 @@ struct ContentView: View {
                 currentCenter = coord
                 currentHeading = newHeading
                 currentDistance = targetDistance
+                filteredSpeedMS = speed
             }
         }
         .onReceive(displayLink) { now in
@@ -137,18 +207,49 @@ struct ContentView: View {
             let tauPos: Double = 0.25
             let tauHeading: Double = 0.25
             let tauDistance: Double = 0.35
+            let tauSpeed: Double = 0.40
 
             // Convert to alpha per frame
             let alphaPos = 1 - exp(-dt / tauPos)
             let alphaHeading = 1 - exp(-dt / tauHeading)
             let alphaDistance = 1 - exp(-dt / tauDistance)
+            let alphaSpeed = 1 - exp(-dt / tauSpeed)
 
-            // Predict target center via dead-reckoning between GPS fixes
+            // Predict heading and speed between fixes (angular velocity + acceleration)
+            let elapsedSinceFix: TimeInterval = lastFixDate.map { max(now.timeIntervalSince($0), 0) } ?? 0
+            var predictedHeading = currentCourseDeg
+            if let prevDate = prevFixDate, let lastDate = lastFixDate {
+                let dtFix = max(lastDate.timeIntervalSince(prevDate), 0.001)
+                let deltaCourse = shortestAngleDelta(from: prevFixCourseDeg, to: currentCourseDeg)
+                let omega = deltaCourse / dtFix // deg per second
+                predictedHeading = normalizedAngle(currentCourseDeg + omega * elapsedSinceFix)
+            }
+
+            var predictedSpeed = currentSpeedMS
+            if let prevDate = prevFixDate, let lastDate = lastFixDate {
+                let dtFix = max(lastDate.timeIntervalSince(prevDate), 0.001)
+                let accel = (currentSpeedMS - prevFixSpeedMS) / dtFix
+                predictedSpeed = max(0, currentSpeedMS + accel * elapsedSinceFix)
+            }
+
+            // Desired heading each frame: only predict at high speed, otherwise no prediction
+            let low: CLLocationSpeed = 0.5
+            let high: CLLocationSpeed = 3.0
+            let usePrediction = predictedSpeed >= high
+            let baseCourse = usePrediction ? predictedHeading : currentCourseDeg
+            var desiredHeading = baseCourse
+            if let compass = locationManager.heading?.trueHeading, compass >= 0 {
+                // Weight: 1 at very baja velocidad, 0 a alta velocidad
+                let w = max(0, min(1, (high - predictedSpeed) / max(high - low, 0.001)))
+                desiredHeading = angleLerp(from: baseCourse, to: compass, t: w)
+            }
+            targetHeading = desiredHeading
+
+            // Predict target center via dead-reckoning using desired heading and predicted speed
             var desiredCenter = targetCenter
-            if let fix = lastFixCoordinate, let fixTime = lastFixDate {
-                let elapsed = max(now.timeIntervalSince(fixTime), 0)
-                let distance = max(currentSpeedMS, 0) * elapsed
-                desiredCenter = project(from: fix, bearing: currentCourseDeg, distanceMeters: distance)
+            if let fix = lastFixCoordinate {
+                let distance = predictedSpeed * elapsedSinceFix
+                desiredCenter = project(from: fix, bearing: desiredHeading, distanceMeters: distance)
             }
 
             // Interpolate center toward desired center
@@ -162,12 +263,19 @@ struct ContentView: View {
                 }
             }
 
-            // Interpolate heading (circular)
+            // Interpolate heading with slew-rate limit to avoid jumps
             let hDelta = shortestAngleDelta(from: currentHeading, to: targetHeading)
-            currentHeading = normalizedAngle(currentHeading + hDelta * alphaHeading)
+            let maxRate: CLLocationDirection = 120 // deg per second
+            let maxStep = maxRate * dt
+            var step = hDelta * alphaHeading
+            if step > maxStep { step = maxStep }
+            if step < -maxStep { step = -maxStep }
+            currentHeading = normalizedAngle(currentHeading + step)
 
-            // Interpolate distance
-            currentDistance += (targetDistance - currentDistance) * alphaDistance
+            // Interpolate speed and derive distance target continuously
+            filteredSpeedMS += (predictedSpeed - filteredSpeedMS) * alphaSpeed
+            let desiredDistance = distance(for: filteredSpeedMS)
+            currentDistance += (desiredDistance - currentDistance) * alphaDistance
 
             // Build and apply camera without implicit SwiftUI animation
             let center = currentCenter ?? fallbackCoordinate
@@ -218,6 +326,11 @@ struct ContentView: View {
         return delta
     }
 
+    private func angleLerp(from: CLLocationDirection, to: CLLocationDirection, t: Double) -> CLLocationDirection {
+        let delta = shortestAngleDelta(from: from, to: to)
+        return normalizedAngle(from + delta * t)
+    }
+
     private func distance(for speed: CLLocationSpeed) -> CLLocationDistance {
         // speed in m/s; map 0..44 m/s (~0..158 km/h) to 150..800 meters
         let minSpeed: CLLocationSpeed = 0
@@ -231,15 +344,40 @@ struct ContentView: View {
 }
 
 struct ArrowIndicator: View {
+    var pitch: CGFloat
+
     var body: some View {
         ZStack {
-            // neon glow aura
+            // Glow aura
             Circle()
-                .fill(RadialGradient(colors: [.cyan.opacity(0.25), .clear], center: .center, startRadius: 2, endRadius: 30))
-            // arrow
+                .fill(RadialGradient(colors: [.cyan.opacity(0.30), .clear], center: .center, startRadius: 2, endRadius: 34))
+
+            // Arrow body with beveled lighting
             ArrowShape()
-                .fill(LinearGradient(colors: [.cyan, .purple], startPoint: .top, endPoint: .bottom))
-                .shadow(color: .cyan.opacity(0.9), radius: 8)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.9), Color.cyan.opacity(0.85), Color.purple.opacity(0.9)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    ArrowShape()
+                        .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                        .blur(radius: 0.5)
+                        .blendMode(.screen)
+                )
+                .shadow(color: .cyan.opacity(0.7), radius: 8, x: 0, y: 4)
+                .shadow(color: .purple.opacity(0.5), radius: 12, x: 0, y: 8)
+                .modifier(ArrowInnerShadow())
+
+            // Top highlight simulating reflection depending on pitch
+            RoundedRectangle(cornerRadius: 8)
+                .fill(LinearGradient(colors: [Color.white.opacity(0.35), Color.white.opacity(0.05)], startPoint: .top, endPoint: .bottom))
+                .frame(width: 18, height: max(2, 8 - (pitch - 20) * 0.08))
+                .offset(y: -12)
+                .blur(radius: 0.5)
+                .blendMode(.screen)
         }
         .compositingGroup()
         .blendMode(.screen)
@@ -268,6 +406,200 @@ struct ArrowShape: Shape {
         p.addLine(to: right)
         p.closeSubpath()
         return p
+    }
+}
+
+struct ArrowInnerShadow: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                ArrowShape()
+                    .stroke(Color.black.opacity(0.35), lineWidth: 6)
+                    .blur(radius: 4)
+                    .offset(y: 2)
+                    .mask(ArrowShape().fill(LinearGradient(colors: [.black, .clear], startPoint: .bottom, endPoint: .top)))
+            )
+    }
+}
+
+struct TickMarksView: View {
+    let size: CGFloat
+    let outerRadius: CGFloat
+    let innerRadiusMajor: CGFloat
+    let innerRadiusMinor: CGFloat
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let majorCount = 12
+            let minorPerMajor = 5
+            let totalMinor = majorCount * minorPerMajor
+
+            func point(angle: CGFloat, radius: CGFloat) -> CGPoint {
+                CGPoint(
+                    x: center.x + cos(angle) * radius,
+                    y: center.y + sin(angle) * radius
+                )
+            }
+
+            // Minor ticks
+            for i in 0..<totalMinor {
+                let isMajor = i % minorPerMajor == 0
+                let a = (CGFloat(i) / CGFloat(totalMinor)) * .pi * 2 - .pi/2
+                let r1 = outerRadius
+                let r2 = isMajor ? innerRadiusMajor : innerRadiusMinor
+                var path = Path()
+                path.move(to: point(angle: a, radius: r1))
+                path.addLine(to: point(angle: a, radius: r2))
+                let stroke = StrokeStyle(lineWidth: isMajor ? 2.0 : 1.0, lineCap: .round)
+                context.stroke(path, with: .color(isMajor ? .cyan : .white.opacity(0.7)), style: stroke)
+            }
+        }
+    }
+}
+
+struct SpeedometerView: View {
+    let speedMS: CLLocationSpeed
+    let radius: CGFloat
+
+    private var speedKmh: Int { Int(max(0, speedMS) * 3.6 + 0.5) }
+
+    var body: some View {
+        ZStack {
+            // Background arc to host the label
+            ArcTextBackground(radius: radius, angleStart: -110, angleEnd: -70)
+                .fill(Color.black.opacity(0.35))
+                .blur(radius: 2)
+                .overlay(
+                    ArcText(text: "\(speedKmh) km/h", radius: radius, angle: -90)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(LinearGradient(colors: [.white, .cyan], startPoint: .top, endPoint: .bottom))
+                        .shadow(color: .cyan.opacity(0.6), radius: 4)
+                )
+        }
+    }
+}
+
+struct ClockOnRingView: View {
+    let radius: CGFloat
+    let angleDegrees: CGFloat
+
+    var body: some View {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        let time = formatter.string(from: Date())
+
+        return ArcTextBackground(radius: radius, angleStart: 70, angleEnd: 110)
+            .fill(Color.black.opacity(0.35))
+            .blur(radius: 2)
+            .overlay(
+                ArcText(text: time, radius: radius, angle: 90)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LinearGradient(colors: [.white, .pink], startPoint: .top, endPoint: .bottom))
+                    .shadow(color: .pink.opacity(0.6), radius: 4)
+            )
+    }
+}
+
+// Helpers to render text along an arc
+struct ArcTextBackground: Shape {
+    let radius: CGFloat
+    let angleStart: CGFloat
+    let angleEnd: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        p.addArc(center: center, radius: radius, startAngle: .degrees(angleStart), endAngle: .degrees(angleEnd), clockwise: false)
+        return p.strokedPath(StrokeStyle(lineWidth: 18, lineCap: .round))
+    }
+}
+
+struct ArcText: View {
+    let text: String
+    let radius: CGFloat
+    let angle: CGFloat // center angle in degrees where text is placed
+
+    var body: some View {
+        Text(text)
+            .kerning(0.5)
+            .modifier(ArcPositionModifier(radius: radius, angleDegrees: angle))
+    }
+}
+
+struct ArcPositionModifier: ViewModifier {
+    let radius: CGFloat
+    let angleDegrees: CGFloat
+
+    func body(content: Content) -> some View {
+        GeometryReader { geo in
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let rad = angleDegrees * .pi / 180
+            let pos = CGPoint(x: center.x + cos(rad) * radius, y: center.y + sin(rad) * radius)
+            content
+                .position(pos)
+                .rotationEffect(.degrees(angleDegrees + 90))
+        }
+    }
+}
+
+struct SpeedBadge: View {
+    let speedMS: CLLocationSpeed
+    private var speedKmh: Int { Int(max(0, speedMS) * 3.6 + 0.5) }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "gauge.medium")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white.opacity(0.9), .cyan)
+                .imageScale(.large)
+                .font(.system(size: 18, weight: .semibold))
+            Text("\(speedKmh) km/h")
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Capsule().stroke(LinearGradient(colors: [.cyan.opacity(0.6), .purple.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                )
+        )
+        .shadow(color: .cyan.opacity(0.35), radius: 8, x: 0, y: 6)
+    }
+}
+
+struct ClockBadge: View {
+    @State private var now: Date = Date()
+    private var formatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white.opacity(0.9), .pink)
+                .imageScale(.large)
+                .font(.system(size: 18, weight: .semibold))
+            Text(formatter.string(from: now))
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Capsule().stroke(LinearGradient(colors: [.pink.opacity(0.6), .purple.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                )
+        )
+        .shadow(color: .pink.opacity(0.35), radius: 8, x: 0, y: 6)
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 }
 
