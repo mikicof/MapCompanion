@@ -1,0 +1,48 @@
+<svg width="300" height="300" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Recorte circular -->
+    <clipPath id="mapClip">
+      <circle cx="150" cy="150" r="140"/>
+    </clipPath>
+
+    <!-- Degradado de fondo: Azul muy oscuro a Rosa muy oscuro -->
+    <radialGradient id="bgGradient" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1a0033" /> <!-- Rosa oscuro central -->
+      <stop offset="100%" stop-color="#000033" /> <!-- Azul oscuro borde -->
+    </radialGradient>
+
+    <!-- Degradado para la calle (diagonal para dinamismo) -->
+    <linearGradient id="roadGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff00cc" /> <!-- Rosa neón oscuro -->
+      <stop offset="50%" stop-color="#9900ff" /> <!-- Violeta intermedio -->
+      <stop offset="100%" stop-color="#0066ff" /> <!-- Azul neón oscuro -->
+    </linearGradient>
+
+    <!-- Degradado para el borde (mismo estilo) -->
+    <linearGradient id="borderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#330066" /> <!-- Azul profundo -->
+      <stop offset="100%" stop-color="#660033" /> <!-- Vino profundo -->
+    </linearGradient>
+  </defs>
+
+  <!-- Fondo circular con degradado radial oscuro -->
+  <circle cx="150" cy="150" r="140" fill="url(#bgGradient)" />
+
+  <!-- Calle única sinuosa (aparece sobre el fondo) -->
+  <g clip-path="url(#mapClip)">
+    <path d="M 150 290 
+             C 110 240, 190 190, 130 150 
+             S 90 110, 170 70 
+             S 120 30, 150 10" 
+          fill="none" 
+          stroke="url(#roadGradient)" 
+          stroke-width="24" 
+          stroke-linecap="round"/>
+  </g>
+
+  <!-- Borde circular grueso con degradado (aparece encima de la calle) -->
+  <circle cx="150" cy="150" r="140" fill="none" 
+          stroke="url(#borderGradient)" 
+          stroke-width="16" 
+          stroke-linecap="round"/>
+</svg>

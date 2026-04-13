@@ -42,9 +42,8 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Map(position: $cameraPosition, interactionModes: []) {
-                UserAnnotation()
             }
-            .mapStyle(.standard(elevation: .realistic, showsTraffic: false))
+            .mapStyle(.standard)
             .allowsHitTesting(false)
             .overlay {
                 GeometryReader { geo in
@@ -167,9 +166,6 @@ struct ContentView: View {
             } else if let last = lastCoordinate {
                 newHeading = bearing(from: last, to: coord)
             }
-            if speed < 1.5, let hdg = locationManager.heading?.trueHeading, hdg >= 0 { // fallback to compass when nearly stopped
-                newHeading = hdg
-            }
             targetCenter = coord
             targetHeading = newHeading
             lastCoordinate = coord
@@ -233,16 +229,10 @@ struct ContentView: View {
             }
 
             // Desired heading each frame: only predict at high speed, otherwise no prediction
-            let low: CLLocationSpeed = 0.5
             let high: CLLocationSpeed = 3.0
             let usePrediction = predictedSpeed >= high
             let baseCourse = usePrediction ? predictedHeading : currentCourseDeg
-            var desiredHeading = baseCourse
-            if let compass = locationManager.heading?.trueHeading, compass >= 0 {
-                // Weight: 1 at very baja velocidad, 0 a alta velocidad
-                let w = max(0, min(1, (high - predictedSpeed) / max(high - low, 0.001)))
-                desiredHeading = angleLerp(from: baseCourse, to: compass, t: w)
-            }
+            let desiredHeading = baseCourse
             targetHeading = desiredHeading
 
             // Predict target center via dead-reckoning using desired heading and predicted speed
